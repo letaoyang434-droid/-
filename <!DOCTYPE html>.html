@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>知舍 · 匠心空间 | 3D 非遗设计</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;500;700&display=swap');
+        
+        :root {
+            --brand-wood: #8B7355;
+            --brand-gold: #C8B88A;
+            --bg-paper: #F9F7F2;
+        }
+
+        body { 
+            font-family: 'Noto Serif SC', serif; 
+            background-color: var(--bg-paper); 
+            margin: 0; 
+            overflow: hidden; 
+            overscroll-behavior: none;
+        }
+
+        #canvas-container { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; z-index: 1; }
+
+        /* UI 基础层级 */
+        .ui-overlay { 
+            position: absolute; inset: 0; 
+            pointer-events: none; 
+            z-index: 10;
+        }
+        .ui-element { pointer-events: auto; }
+        
+        /* 品牌质感玻璃面板 */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 12px 40px rgba(139, 115, 85, 0.12);
+        }
+
+        /* 拖动手柄 */
+        .drag-handle { cursor: move; user-select: none; touch-action: none; }
+        
+        /* 范围选择器美化 */
+        input[type=range] { -webkit-appearance: none; background: #EBE5D9; height: 2px; border-radius: 2px; }
+        input[type=range]::-webkit-slider-thumb { 
+            -webkit-appearance: none; height: 18px; width: 18px; border-radius: 50%; 
+            background: var(--brand-wood); cursor: pointer; border: 3px solid white; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1); 
+        }
+
+        /* 状态按钮 */
+        .mode-switch { background: #EBE5D9; padding: 3px; border-radius: 99px; display: flex; }
+        .mode-btn { padding: 6px 16px; border-radius: 99px; font-size: 11px; transition: all 0.3s; color: var(--brand-wood); }
+        .mode-btn.active { background: var(--brand-wood); color: white; }
+
+        /* 面板收缩动画 */
+        .minimized {
+            width: 56px !important; height: 56px !important; padding: 0 !important;
+            border-radius: 28px !important; overflow: hidden; display: flex;
+            align-items: center; justify-content: center;
+        }
+        .minimized .panel-content { display: none; }
+        .minimized .minimize-icon { transform: rotate(180deg); }
+
+        /* 视图系统 */
+        .view-section { 
+            position: absolute; inset: 0; 
+            transition: opacity 0.8s ease, transform 0.8s ease;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+        }
+        .hidden-view { opacity: 0; pointer-events: none; transform: scale(1.02); visibility: hidden; }
+
+        /* 分享卡片 - 紧凑不滚动布局 */
+        #shareCard {
+            background: white;
+            box-shadow: 0 40px 120px rgba(0,0,0,0.2);
+            border: 1px solid #EBE5D9;
+            width: 320px;
+            border-radius: 12px;
+            position: fixed;
+            z-index: 2000;
+            display: none;
+            flex-direction: column;
+            overflow: hidden;
+            touch-action: none;
+            opacity: 0;
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+
+        .card-footer {
+            padding: 16px 20px 12px 20px;
+            background: #fff;
+            border-top: 1px solid #F7F5F0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        /* 全屏遮罩 */
+        #modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.2); 
+            backdrop-filter: blur(8px); z-index: 1500; display: none;
+        }
+
+        /* 品牌开场动画 */
+        #intro-loader {
+            position: fixed; inset: 0; z-index: 3000;
+            background: var(--bg-paper); display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            transition: opacity 1s ease;
+        }
+        .loading-text { font-size: 1.1rem; letter-spacing: 0.5em; color: var(--brand-wood); animation: breathe 3s infinite; }
+        @keyframes breathe { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
+        .vertical-text { writing-mode: vertical-rl; }
+        
+        /* 全局轻提示 */
+        #message-tip {
+            position: fixed; top: 30px; left: 50%; transform: translateX(-50%);
+            padding: 10px 24px; border-radius: 99px; font-size: 12px;
+            z-index: 4000; opacity: 0; transition: all 0.3s;
+        }
+        #message-tip.show { opacity: 1; transform: translateX(-50%) translateY(10px); }
+    </style>
+</head>
+<body>
+
+    <!-- 开场动画：正在织就专属物语 -->
+    <div id="intro-loader">
+        <div class="loading-text">正在织就专属物语...</div>
+        <div class="w-48 h-px bg-[#EBE5D9] mt-8 relative overflow-hidden">
+            <div id="load-progress" class="absolute h-full bg-[#8B7355] transition-all duration-300" style="width: 0%"></div>
+        </div>
+    </div>
+
+    <!-- 结果背板遮罩 -->
+    <div id="modal-overlay"></div>
+
+    <!-- 3D 背景层 -->
+    <div id="canvas-container"></div>
+    <div id="message-tip" class="glass-panel text-[#8B7355] border-[#8B7355]/20">已还原至初始设计</div>
+
+    <div class="ui-overlay">
+        
+        <!-- 引导主页 -->
+        <section id="view-home" class="view-section">
+            <div class="text-center space-y-10 ui-element">
+                <div class="space-y-4">
+                    <h1 class="text-6xl md:text-8xl tracking-[0.5em] text-[#5C5042] font-bold">知舍</h1>
+                    <p class="text-sm tracking-[0.6em] text-[#8B7355] italic">"知它一生所依，舍你满心所寄"</p>
+                </div>
+                <button onclick="enterStudio()" class="px-20 py-5 bg-[#8B7355] text-white rounded-full tracking-[0.6em] text-sm shadow-2xl hover:bg-[#5C5042] transition-all active:scale-95">
+                    开启设计
+                </button>
+            </div>
+        </section>
+
+        <!-- 设计工坊视图 -->
+        <section id="view-studio" class="view-section hidden-view">
+            <header class="absolute top-0 left-0 w-full p-8 flex justify-between items-start ui-element">
+                <button onclick="backToHome()" class="p-4 glass-panel rounded-full hover:bg-white transition-all shadow-md active:scale-90" title="回到主页">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5C5042" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                </button>
+                <div class="glass-panel p-1 rounded-full flex items-center shadow-sm">
+                    <div class="mode-switch">
+                        <button id="btn-rotate" onclick="setMode('rotate')" class="mode-btn active">旋转视角</button>
+                        <button id="btn-paint" onclick="setMode('paint')" class="mode-btn">涂抹设计</button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- 可拖动的设计面板 -->
+            <aside id="design-panel" class="absolute right-8 bottom-12 glass-panel p-8 rounded-[40px] w-80 ui-element flex flex-col transition-all duration-500">
+                <div id="panel-header" class="flex justify-between items-center mb-6 drag-handle">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xl">🏺</span>
+                        <h2 class="text-base font-bold text-[#5C5042] panel-content">参数工坊</h2>
+                    </div>
+                    <button onclick="toggleMinimize()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors">
+                        <svg class="minimize-icon transition-transform" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8B7355" stroke-width="3"><path d="M18 15l-6-6-6 6"/></svg>
+                    </button>
+                </div>
+                
+                <div class="panel-content space-y-6">
+                    <div class="space-y-3">
+                        <div class="flex justify-between text-[11px] text-gray-400 uppercase tracking-widest font-bold"><span>造型高度</span><span id="label-height" class="font-mono text-[#8B7355]">1.2</span></div>
+                        <input type="range" id="input-height" min="0.5" max="2.0" step="0.1" value="1.2" class="w-full">
+                    </div>
+                    <div class="space-y-3">
+                        <div class="flex justify-between text-[11px] text-gray-400 uppercase tracking-widest font-bold"><span>饱满曲度</span><span id="label-curve" class="font-mono text-[#8B7355]">0.8</span></div>
+                        <input type="range" id="input-curve" min="0.2" max="1.5" step="0.1" value="0.8" class="w-full">
+                    </div>
+                    <div class="space-y-3">
+                        <div class="flex justify-between text-[11px] text-gray-400 uppercase tracking-widest font-bold"><span>洞口大小</span><span id="label-hole" class="font-mono text-[#8B7355]">0.6</span></div>
+                        <input type="range" id="input-hole" min="0.1" max="1.2" step="0.1" value="0.6" class="w-full">
+                    </div>
+                    <div class="space-y-4 pt-2 border-t border-gray-100/50">
+                        <div class="text-[11px] text-gray-400 text-center tracking-widest uppercase font-bold">手作色漆</div>
+                        <div class="flex justify-center gap-4">
+                            <button onclick="setPaintColor('#4A5E5E')" class="w-9 h-9 rounded-full border-2 border-white shadow-md hover:scale-110 transition-transform" style="background: #4A5E5E;"></button>
+                            <button onclick="setPaintColor('#A64D4D')" class="w-9 h-9 rounded-full border-2 border-white shadow-md hover:scale-110 transition-transform" style="background: #A64D4D;"></button>
+                            <button onclick="setPaintColor('#5C5042')" class="w-9 h-9 rounded-full border-2 border-white shadow-md hover:scale-110 transition-transform" style="background: #5C5042;"></button>
+                            <button onclick="setPaintColor('#E5D5B5')" class="w-9 h-9 rounded-full border-2 border-white shadow-md hover:scale-110 transition-transform" style="background: #E5D5B5;"></button>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-3 pt-4">
+                        <button onclick="handleFinish()" class="w-full py-4 bg-[#8B7355] text-white rounded-2xl text-sm font-bold tracking-[0.5em] shadow-lg active:scale-95 transition-all">定格生成卡片</button>
+                        <button onclick="resetToDefault()" class="w-full py-2 border border-[#8B7355]/30 text-[#8B7355] rounded-xl text-[10px] tracking-[0.2em] hover:bg-[#8B7355]/5">还原最初设计</button>
+                    </div>
+                </div>
+            </aside>
+        </section>
+    </div>
+
+    <!-- 最终作品卡片：紧凑版布局 -->
+    <div id="shareCard" class="ui-element">
+        <div id="card-drag-handle" class="w-full py-3 bg-[#F9F7F2] border-b border-[#F0EEE6] flex justify-center drag-handle">
+            <div class="w-12 h-1 bg-[#D4C4A8] rounded-full"></div>
+        </div>
+        
+        <div class="card-content">
+            <div class="w-full aspect-[4/3] bg-[#F7F5F0] relative flex items-center justify-center p-4">
+                <img id="card-img" class="max-w-full max-h-full object-contain pointer-events-none" src="" />
+                <div class="absolute top-4 left-4 text-[8px] text-[#8B7355] tracking-[0.4em] font-light">知舍 · 手作</div>
+            </div>
+
+            <div class="px-8 py-5 flex flex-col items-start text-left bg-white">
+                <h2 id="card-name" class="text-2xl text-[#5C5042] tracking-[0.2em] mb-2 font-bold"></h2>
+                <div class="w-8 h-0.5 bg-[#C8B88A] mb-4"></div>
+                <p id="card-poem" class="text-[13px] text-gray-600 leading-relaxed italic"></p>
+                
+                <div class="mt-4 flex justify-between items-end w-full border-t border-gray-50 pt-3">
+                    <div class="flex flex-col">
+                        <span class="text-[7px] text-gray-400 uppercase tracking-widest font-bold">Handmade In Fuyang</span>
+                        <span class="text-[9px] text-[#8B7355] tracking-tighter">Serial No. ZHISHE-2026</span>
+                    </div>
+                    <div class="text-[8px] text-gray-300 vertical-text opacity-50 uppercase tracking-widest font-bold">Heritage</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card-footer">
+            <div class="grid grid-cols-2 gap-3">
+                <button onclick="closeModal()" class="py-4 border border-[#8B7355] text-[#8B7355] text-[11px] font-bold tracking-widest rounded-xl hover:bg-[#F9F7F2] active:scale-95 transition-all">继续设计</button>
+                <button onclick="saveImage()" class="py-4 bg-[#8B7355] text-white text-[11px] font-bold tracking-widest rounded-xl shadow-lg active:scale-95 transition-all">保存作品</button>
+            </div>
+            <button onclick="backToHomeFromCard()" class="py-1 text-[#8B7355]/40 text-[10px] tracking-[0.3em] hover:text-[#5C5042] transition-all underline underline-offset-4">返回主页</button>
+        </div>
+    </div>
+
+    <script>
+        const DEFAULT_PARAMS = { height: 1.2, curve: 0.8, holeSize: 0.6, baseColor: '#E5D5B5' };
+        let currentParams = JSON.parse(JSON.stringify(DEFAULT_PARAMS));
+        let interactionMode = 'rotate', paintColor = '#4A5E5E', strandColors = {}, isModalOpen = false;
+
+        const QUOTE_LIBRARY = [
+            { name: "暖岁茧", poem: "经纬交织，每一寸柳条都承载着守护的温暖。" },
+            { name: "隐山居", poem: "泥土与柳木的芬芳，是给它最好的自然礼物。" },
+            { name: "灵心阁", poem: "指尖摩挲间，每一寸柔韧皆是岁月的慈悲。" },
+            { name: "织梦巢", poem: "给它一个有温度的家，藏住四季最美的清梦。" },
+            { name: "圆融庐", poem: "外圆而内安，这是非遗技艺跨越时空的温柔。" },
+            { name: "岁时记", poem: "慢工出细活，让自然走进朝夕陪伴的生活。" },
+            { name: "归心处", poem: "知它一生所依，舍你满心所寄。" },
+            { name: "筑梦集", poem: "用匠人的手作之心，换它一整晚的惬意安睡。" },
+            { name: "织心舍", poem: "织就的是柔韧柳条，连接的是你与它的那份情意。" },
+            { name: "柳风亭", poem: "晨光熹微，柳条轻颤，织就满室的一份安宁。" }
+        ];
+
+        let scene, camera, renderer, nestGroup, raycaster, mouse;
+
+        function initApp() {
+            let p = 0;
+            const timer = setInterval(() => {
+                p += Math.random() * 15;
+                if(p >= 100) { p = 100; clearInterval(timer); setTimeout(finishLoading, 400); }
+                document.getElementById('load-progress').style.width = p + '%';
+            }, 80);
+            init3D();
+        }
+
+        function finishLoading() {
+            document.getElementById('intro-loader').style.opacity = '0';
+            setTimeout(() => document.getElementById('intro-loader').style.display = 'none', 1000);
+        }
+
+        function init3D() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xF9F7F2);
+            camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(7.5, 4.5, 9.5);
+            camera.lookAt(0, 0.8, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+            const sun = new THREE.SpotLight(0xffffff, 0.7);
+            sun.position.set(10, 20, 10);
+            sun.castShadow = true;
+            scene.add(sun);
+
+            const floor = new THREE.Mesh(new THREE.CircleGeometry(15, 64), new THREE.MeshPhongMaterial({ color: 0xF2EFE9 }));
+            floor.rotation.x = -Math.PI/2; floor.position.y = -0.6; floor.receiveShadow = true;
+            scene.add(floor);
+
+            nestGroup = new THREE.Group();
+            scene.add(nestGroup);
+            nestGroup.visible = false;
+
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+
+            setupInteraction();
+            updateModel();
+            animate();
+
+            initDraggable(document.getElementById('design-panel'), document.getElementById('panel-header'));
+            initDraggable(document.getElementById('shareCard'), document.getElementById('card-drag-handle'));
+        }
+
+        function updateModel() {
+            while(nestGroup.children.length > 0) {
+                const child = nestGroup.children[0];
+                if(child.isGroup) child.children.forEach(c => { c.geometry.dispose(); c.material.dispose(); });
+                else { child.geometry.dispose(); child.material.dispose(); }
+                nestGroup.remove(child);
+            }
+            const { height, curve, holeSize, baseColor } = currentParams;
+            const res = 64, hor = 100, totalH = height * 2.5, holeAngle = holeSize * 0.8;
+
+            for (let r = 0; r < res; r++) {
+                const t = r / res;
+                const radius = 2.0 + Math.sin(t * Math.PI) * curve - (t > 0.5 ? (t - 0.5) * 3.5 : 0);
+                const phase = (r % 2) * (Math.PI / hor);
+                for (let s = 0; s < hor; s++) {
+                    const angle = (s / hor) * Math.PI * 2 + phase;
+                    let normAngle = angle % (Math.PI * 2);
+                    if (normAngle > Math.PI) normAngle -= Math.PI * 2;
+                    if (Math.abs(normAngle - Math.PI/2) < holeAngle && t > 0.1 && t < 0.6) continue;
+
+                    const strandId = `r${r}s${s}`;
+                    const mat = new THREE.MeshPhongMaterial({ color: strandColors[strandId] || baseColor, shininess: 8 });
+                    const strand = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.35, 6), mat);
+                    strand.position.set(radius * Math.cos(angle), t * totalH, radius * Math.sin(angle));
+                    strand.rotation.y = -angle; strand.rotation.z = Math.PI/2 + (Math.sin(s * 0.5) * 0.1);
+                    strand.isStrand = true; strand.strandId = strandId;
+                    strand.castShadow = true;
+                    nestGroup.add(strand);
+                }
+            }
+            const base = new THREE.Mesh(new THREE.CylinderGeometry(2.1, 2.15, 0.45, 40), new THREE.MeshPhongMaterial({color: '#EEE5D8'}));
+            base.position.y = -0.35; base.receiveShadow = true;
+            nestGroup.add(base);
+        }
+
+        function setupInteraction() {
+            let isDragging = false, prevX = 0;
+            const container = document.getElementById('canvas-container');
+            const onMove = (e) => {
+                const cx = e.touches ? e.touches[0].clientX : e.clientX, cy = e.touches ? e.touches[0].clientY : e.clientY;
+                if(!isDragging || isModalOpen) return;
+                if(interactionMode === 'rotate') { nestGroup.rotation.y += (cx - prevX) * 0.008; } 
+                else {
+                    const rect = renderer.domElement.getBoundingClientRect();
+                    mouse.x = ((cx - rect.left) / rect.width) * 2 - 1;
+                    mouse.y = -((cy - rect.top) / rect.height) * 2 + 1;
+                    raycaster.setFromCamera(mouse, camera);
+                    const hits = raycaster.intersectObjects(nestGroup.children, true);
+                    if(hits.length > 0 && hits[0].object.isStrand) { hits[0].object.material.color.set(paintColor); strandColors[hits[0].object.strandId] = paintColor; }
+                }
+                prevX = cx;
+            };
+            container.addEventListener('mousedown', (e) => { if(e.target.closest('.ui-element')) return; isDragging = true; prevX = e.clientX; });
+            window.addEventListener('mouseup', () => isDragging = false);
+            container.addEventListener('mousemove', onMove);
+            container.addEventListener('touchstart', (e) => { if(e.target.closest('.ui-element')) return; isDragging = true; prevX = e.touches[0].clientX; }, {passive:false});
+            container.addEventListener('touchend', () => isDragging = false);
+            container.addEventListener('touchmove', onMove, {passive:false});
+
+            ['height', 'curve', 'hole'].forEach(id => {
+                document.getElementById(`input-${id}`).oninput = (e) => {
+                    const val = parseFloat(e.target.value);
+                    if(id === 'hole') currentParams.holeSize = val; else currentParams[id] = val;
+                    document.getElementById(`label-${id}`).innerText = val.toFixed(1);
+                    updateModel();
+                };
+            });
+        }
+
+        function enterStudio() {
+            document.getElementById('view-home').classList.add('hidden-view');
+            document.getElementById('view-studio').classList.remove('hidden-view');
+            nestGroup.visible = true;
+        }
+
+        function backToHome() {
+            document.getElementById('view-studio').classList.add('hidden-view');
+            document.getElementById('view-home').classList.remove('hidden-view');
+            nestGroup.visible = false;
+        }
+
+        function backToHomeFromCard() { closeModal(); backToHome(); }
+
+        function handleFinish() {
+            isModalOpen = true;
+            document.getElementById('modal-overlay').style.display = 'block';
+            const card = document.getElementById('shareCard');
+            card.style.display = 'flex';
+            card.style.top = '50%'; card.style.left = '50%';
+            card.style.transform = 'translate(-50%, -50%) scale(0.95)';
+            
+            renderer.render(scene, camera);
+            document.getElementById('card-img').src = renderer.domElement.toDataURL();
+            const entry = QUOTE_LIBRARY[Math.floor(Math.random() * QUOTE_LIBRARY.length)];
+            document.getElementById('card-name').innerText = entry.name;
+            document.getElementById('card-poem').innerText = entry.poem;
+            
+            requestAnimationFrame(() => {
+                card.style.opacity = '1';
+                card.style.transform = 'translate(-50%, -50%) scale(1)';
+            });
+        }
+
+        function closeModal() { 
+            isModalOpen = false; 
+            document.getElementById('modal-overlay').style.display = 'none';
+            document.getElementById('shareCard').style.opacity = '0';
+            document.getElementById('shareCard').style.transform = 'translate(-50%, -50%) scale(0.95)';
+            setTimeout(() => { document.getElementById('shareCard').style.display = 'none'; }, 400);
+        }
+        
+        function resetToDefault() {
+            currentParams = JSON.parse(JSON.stringify(DEFAULT_PARAMS)); strandColors = {};
+            ['height', 'curve', 'hole'].forEach(id => {
+                const key = id === 'hole' ? 'holeSize' : id;
+                document.getElementById(`input-${id}`).value = DEFAULT_PARAMS[key];
+                document.getElementById(`label-${id}`).innerText = DEFAULT_PARAMS[key].toFixed(1);
+            });
+            updateModel(); nestGroup.rotation.y = 0;
+            showTip("已还原至初始设计");
+        }
+
+        function showTip(t) { const el = document.getElementById('message-tip'); el.innerText = t; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2000); }
+
+        function initDraggable(el, handle) {
+            let startX, startY, initialLeft, initialTop;
+            const onStart = (e) => {
+                e.stopPropagation();
+                if(el.classList.contains('minimized')) return;
+                const cx = e.touches ? e.touches[0].clientX : e.clientX, cy = e.touches ? e.touches[0].clientY : e.clientY;
+                const rect = el.getBoundingClientRect();
+                el.style.transform = 'none'; el.style.position = 'fixed';
+                el.style.top = rect.top + 'px'; el.style.left = rect.left + 'px';
+                el.style.margin = '0';
+                startX = cx; startY = cy; initialLeft = rect.left; initialTop = rect.top;
+                const onMove = (ev) => {
+                    const mx = ev.touches ? ev.touches[0].clientX : ev.clientX, my = ev.touches ? ev.touches[0].clientY : ev.clientY;
+                    el.style.left = (initialLeft + (mx - startX)) + "px"; el.style.top = (initialTop + (my - startY)) + "px";
+                };
+                const onEnd = () => { 
+                    document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onEnd);
+                    document.removeEventListener('touchmove', onMove); document.removeEventListener('touchend', onEnd);
+                };
+                document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onEnd);
+                document.addEventListener('touchmove', onMove, {passive:false}); document.addEventListener('touchend', onEnd);
+            };
+            handle.addEventListener('mousedown', onStart); handle.addEventListener('touchstart', onStart, {passive:false});
+        }
+
+        function toggleMinimize() { document.getElementById('design-panel').classList.toggle('minimized'); }
+        function setMode(m) { interactionMode = m; document.getElementById('btn-rotate').classList.toggle('active', m === 'rotate'); document.getElementById('btn-paint').classList.toggle('active', m === 'paint'); }
+        function setPaintColor(c) { paintColor = c; setMode('paint'); }
+        function saveImage() { showTip("长按卡片区域即可保存至相册"); }
+        function animate() { requestAnimationFrame(animate); renderer.render(scene, camera); }
+
+        window.onload = initApp;
+        window.onresize = () => { 
+            camera.aspect = window.innerWidth/window.innerHeight; 
+            camera.updateProjectionMatrix(); 
+            renderer.setSize(window.innerWidth, window.innerHeight); 
+        };
+    </script>
+</body>
+</html>
